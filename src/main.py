@@ -201,8 +201,26 @@ def game():
     sound_manager.load_sound("grass3", assets_dir / "sounds" / "grass3.wav", 0.1)
     sound_manager.load_sound("grass4", assets_dir / "sounds" / "grass4.wav", 0.1)
 
+    # Temporary pickaxes list
+    temporary_pickaxes = []
+    
+    # Callback function for when obsidian is destroyed
+    def on_obsidian_destroyed(x, y):
+        """Create a temporary pickaxe when obsidian is destroyed."""
+        print(f"Obsidian destroyed at ({x}, {y}), creating temporary pickaxe")
+        temp_pickaxe = Pickaxe(
+            space, 
+            x + random.randint(-50, 50),  # Spawn near the destroyed obsidian with some randomness
+            y - 100,  # Spawn above the destroyed obsidian
+            texture_atlas.subsurface(atlas_items["pickaxe"]["wooden_pickaxe"]), 
+            sound_manager,
+            damage=2,
+            is_temporary=True
+        )
+        temporary_pickaxes.append(temp_pickaxe)
+
     # Pickaxe
-    pickaxe = Pickaxe(space, INTERNAL_WIDTH // 2, INTERNAL_HEIGHT // 2, texture_atlas.subsurface(atlas_items["pickaxe"]["wooden_pickaxe"]), sound_manager)
+    pickaxe = Pickaxe(space, INTERNAL_WIDTH // 2, INTERNAL_HEIGHT // 2, texture_atlas.subsurface(atlas_items["pickaxe"]["wooden_pickaxe"]), sound_manager, obsidian_callback=on_obsidian_destroyed)
 
     # TNT
     last_tnt_spawn = pygame.time.get_ticks()
@@ -281,6 +299,18 @@ def game():
 
         # Update pickaxe
         pickaxe.update()
+
+        # Update temporary pickaxes and remove expired ones
+        temp_pickaxes_to_remove = []
+        for temp_pickaxe in temporary_pickaxes:
+            if not temp_pickaxe.update():  # Returns False if expired
+                temp_pickaxes_to_remove.append(temp_pickaxe)
+        
+        # Clean up expired temporary pickaxes
+        for temp_pickaxe in temp_pickaxes_to_remove:
+            temp_pickaxe.cleanup()
+            temporary_pickaxes.remove(temp_pickaxe)
+            print("Removed expired temporary pickaxe")
 
         # Update camera
         camera.update(pickaxe.body.position.y)
@@ -415,6 +445,10 @@ def game():
 
         # Draw pickaxe
         pickaxe.draw(internal_surface, camera)
+
+        # Draw temporary pickaxes
+        for temp_pickaxe in temporary_pickaxes:
+            temp_pickaxe.draw(internal_surface, camera)
 
         # Draw TNT
         for tnt in tnt_list:
