@@ -26,6 +26,68 @@ def rotate_vertices(vertices, angle):
         
         return rotated_vertices
 
+class TemporaryPickaxe:
+    """A temporary pickaxe that spawns when obsidian is destroyed."""
+    def __init__(self, space, x, y, texture, velocity_x, velocity_y, rotation_speed):
+        self.texture = texture
+        self.space = space
+        self.creation_time = pygame.time.get_ticks()
+        self.lifetime = 120000  # 2 minutes in milliseconds
+        
+        # Create physics body for the temporary pickaxe
+        vertices = rotate_vertices([
+            (0, 0), (10, 0), (110, 100), (100, 110), (0, 10), (110, 110)
+        ], -math.pi / 2)
+        
+        mass = 50  # Lighter than main pickaxe
+        inertia = pymunk.moment_for_poly(mass, vertices)
+        self.body = pymunk.Body(mass, inertia)
+        self.body.position = (x, y)
+        self.body.velocity = (velocity_x, velocity_y)
+        self.body.angular_velocity = rotation_speed
+        
+        # Create shape but don't add collision handlers
+        self.shape = pymunk.Poly(self.body, vertices)
+        self.shape.elasticity = 0.3
+        self.shape.friction = 0.3
+        # No collision type set - this pickaxe won't handle collisions
+        
+        self.space.add(self.body, self.shape)
+    
+    def is_expired(self):
+        """Check if the temporary pickaxe should be removed."""
+        return pygame.time.get_ticks() - self.creation_time > self.lifetime
+    
+    def update(self):
+        """Update temporary pickaxe (mainly for bounds checking)."""
+        # Simple bounds checking similar to main pickaxe
+        world_pos = self.body.position
+        
+        left_limit = BLOCK_SIZE
+        right_limit = BLOCK_SIZE * (CHUNK_WIDTH - 1)
+        
+        if world_pos.x < left_limit:
+            self.body.position = (left_limit, world_pos.y)
+        elif world_pos.x > right_limit:
+            self.body.position = (right_limit, world_pos.y)
+        
+        # Limit falling speed
+        if self.body.velocity.y > 1000:
+            self.body.velocity = (self.body.velocity.x, 1000)
+    
+    def draw(self, screen, camera):
+        """Draw the temporary pickaxe."""
+        rotated_image = pygame.transform.rotate(self.texture, -math.degrees(self.body.angle))
+        rect = rotated_image.get_rect(center=(self.body.position.x, self.body.position.y))
+        rect.y -= camera.offset_y
+        rect.x -= camera.offset_x
+        screen.blit(rotated_image, rect)
+    
+    def cleanup(self):
+        """Remove the temporary pickaxe from the physics space."""
+        if self.body in self.space.bodies:
+            self.space.remove(self.body, self.shape)
+
 class Pickaxe:
     def __init__(self, space, x, y, texture, sound_manager, damage=2, velocity=0, rotation=0, mass=100):
         self.texture = texture
@@ -34,6 +96,7 @@ class Pickaxe:
         self.space = space
         self.damage = damage
         self.is_enlarged = False
+        self.temporary_pickaxes = []  # List to track temporary pickaxes
 
         vertices = rotate_vertices([
                     (0, 0), # A
@@ -93,6 +156,10 @@ class Pickaxe:
 
         block.hp -= self.damage  # Reduce HP when hit
 
+        # Check if obsidian block is destroyed and create temporary pickaxe
+        if block.name == "obsidian" and block.hp <= 0:
+            self.spawn_temporary_pickaxe(block.body.position.x, block.body.position.y)
+
         if (block.name == "grass_block" or block.name == "dirt"):
             self.sound_manager.play_sound("grass" + str(random.randint(1, 4)))
         else:
@@ -100,6 +167,20 @@ class Pickaxe:
 
         # Add small random rotation on hit
         self.body.angle += random.choice([0.01, -0.01])
+    
+    def spawn_temporary_pickaxe(self, block_x, block_y):
+        """Create a temporary pickaxe when obsidian is destroyed."""
+        # Generate random velocity and rotation
+        velocity_x = random.uniform(-200, 200)
+        velocity_y = random.uniform(-400, -100)  # Upward initial velocity
+        rotation_speed = random.uniform(-5, 5)
+        
+        # Create temporary pickaxe with same texture as main pickaxe
+        temp_pickaxe = TemporaryPickaxe(
+            self.space, block_x, block_y, self.texture, 
+            velocity_x, velocity_y, rotation_speed
+        )
+        self.temporary_pickaxes.append(temp_pickaxe)
 
     def random_pickaxe(self, texture_atlas, atlas_items): 
         """Randomly change the pickaxe's properties."""
@@ -185,6 +266,18 @@ class Pickaxe:
         if hasattr(self, "enlarge_end_time") and pygame.time.get_ticks() > self.enlarge_end_time:
             self.reset_size()
             self.is_enlarged = False
+        
+        # Update temporary pickaxes
+        expired_pickaxes = []
+        for temp_pickaxe in self.temporary_pickaxes:
+            temp_pickaxe.update()
+            if temp_pickaxe.is_expired():
+                temp_pickaxe.cleanup()
+                expired_pickaxes.append(temp_pickaxe)
+        
+        # Remove expired temporary pickaxes
+        for temp_pickaxe in expired_pickaxes:
+            self.temporary_pickaxes.remove(temp_pickaxe)
 
     def draw(self, screen, camera):
         """Draw the pickaxe at its current position."""
@@ -193,6 +286,10 @@ class Pickaxe:
         rect.y -= camera.offset_y
         rect.x -= camera.offset_x
         screen.blit(rotated_image, rect)
+        
+        # Draw temporary pickaxes
+        for temp_pickaxe in self.temporary_pickaxes:
+            temp_pickaxe.draw(screen, camera)
 
     def enlarge(self, duration=5000):
         """Temporarily makes the pickaxe 3 times bigger with a larger hitbox."""
