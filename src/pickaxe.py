@@ -27,13 +27,20 @@ def rotate_vertices(vertices, angle):
         return rotated_vertices
 
 class Pickaxe:
-    def __init__(self, space, x, y, texture, sound_manager, damage=2, velocity=0, rotation=0, mass=100):
+    def __init__(self, space, x, y, texture, sound_manager, damage=2, velocity=0, rotation=0, mass=100, obsidian_callback=None, is_temporary=False):
         self.texture = texture
         self.velocity = velocity
         self.rotation = rotation
         self.space = space
         self.damage = damage
         self.is_enlarged = False
+        self.obsidian_callback = obsidian_callback  # Callback for when obsidian is destroyed
+        self.is_temporary = is_temporary  # Whether this is a temporary pickaxe
+        
+        # For temporary pickaxes
+        if is_temporary:
+            self.creation_time = pygame.time.get_ticks()
+            self.lifetime_ms = 120000  # 2 minutes
 
         vertices = rotate_vertices([
                     (0, 0), # A
@@ -79,9 +86,10 @@ class Pickaxe:
 
         self.space.add(self.body, *self.shapes)
 
-        # Add collision handler for pickaxe & blocks
-        handler = space.add_collision_handler(1, 2)  # (Pickaxe type, Block type)
-        handler.post_solve = self.on_collision
+        # Add collision handler for pickaxe & blocks only for non-temporary pickaxes
+        if not is_temporary:
+            handler = space.add_collision_handler(1, 2)  # (Pickaxe type, Block type)
+            handler.post_solve = self.on_collision
 
     def on_collision(self, arbiter, space, data):
         """Handles collision with blocks: Reduce HP or destroy the block."""
@@ -91,7 +99,15 @@ class Pickaxe:
         block.first_hit_time = pygame.time.get_ticks()  
         block.last_heal_time = block.first_hit_time
 
+        # Check if this hit will destroy an obsidian block
+        was_obsidian = block.name == "obsidian"
+        old_hp = block.hp
+        
         block.hp -= self.damage  # Reduce HP when hit
+
+        # If obsidian block was just destroyed, trigger callback
+        if was_obsidian and old_hp > 0 and block.hp <= 0 and self.obsidian_callback:
+            self.obsidian_callback(block.body.position.x, block.body.position.y)
 
         if (block.name == "grass_block" or block.name == "dirt"):
             self.sound_manager.play_sound("grass" + str(random.randint(1, 4)))
@@ -156,6 +172,12 @@ class Pickaxe:
         if self.body.velocity.y > 1000:
             self.body.velocity = (self.body.velocity.x, 1000)
 
+        # Check if temporary pickaxe has expired
+        if self.is_temporary:
+            current_time = pygame.time.get_ticks()
+            if current_time - self.creation_time >= self.lifetime_ms:
+                return False  # Signal that this pickaxe should be removed
+
         # --- Bounding box check for bedrock collision ---
         # Gather all vertices from all shapes, transformed to world coordinates
         all_vertices = []
@@ -185,6 +207,8 @@ class Pickaxe:
         if hasattr(self, "enlarge_end_time") and pygame.time.get_ticks() > self.enlarge_end_time:
             self.reset_size()
             self.is_enlarged = False
+            
+        return True  # Pickaxe is still valid
 
     def draw(self, screen, camera):
         """Draw the pickaxe at its current position."""
@@ -242,3 +266,11 @@ class Pickaxe:
             self.is_enlarged = False
 
             del self.enlarge_end_time  # Remove the enlargement timer
+
+    def cleanup(self):
+        """Clean up the pickaxe by removing it from the physics space."""
+        if hasattr(self, 'shapes') and self.space:
+            try:
+                self.space.remove(self.body, *self.shapes)
+            except:
+                pass  # Ignore errors if already removed
